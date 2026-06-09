@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import './App.css'
 
@@ -23,6 +23,7 @@ type MediaItem = {
 
 type IconName =
   | 'archive'
+  | 'eye'
   | 'fileText'
   | 'image'
   | 'lock'
@@ -34,6 +35,7 @@ type IconName =
   | 'trash'
   | 'upload'
   | 'user'
+  | 'x'
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || 'http://127.0.0.1:8000/api'
@@ -49,6 +51,12 @@ function Icon({ name }: { name: IconName }) {
         <path d="M5 7l1 14h12l1-14" />
         <path d="M8 7V4h8v3" />
         <path d="M9 12h6" />
+      </>
+    ),
+    eye: (
+      <>
+        <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" />
+        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" />
       </>
     ),
     fileText: (
@@ -124,6 +132,12 @@ function Icon({ name }: { name: IconName }) {
         <path d="M4 21a8 8 0 0 1 16 0" />
       </>
     ),
+    x: (
+      <>
+        <path d="M6 6l12 12" />
+        <path d="M18 6L6 18" />
+      </>
+    ),
   }
 
   return (
@@ -151,6 +165,7 @@ function App() {
   const [file, setFile] = useState<File | null>(null)
   const [filter, setFilter] = useState<'all' | MediaType>('all')
   const [items, setItems] = useState<MediaItem[]>([])
+  const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null)
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -185,19 +200,44 @@ function App() {
       })
   }, [authHeaders, token])
 
-  useEffect(() => {
-    if (!token) return
-    loadMedia()
-  }, [filter, token])
-
-  async function apiFetch(path: string, options: RequestInit = {}) {
+  const apiFetch = useCallback(async (path: string, options: RequestInit = {}) => {
     const response = await fetch(`${API_BASE_URL}${path}`, options)
     const data = await response.json().catch(() => ({}))
     if (!response.ok) {
       throw new Error(data.detail || 'Request failed')
     }
     return data
-  }
+  }, [])
+
+  const loadMedia = useCallback(async () => {
+    const query = filter === 'all' ? '' : `?type=${filter}`
+    try {
+      const data = await apiFetch(`/media/${query}`, { headers: authHeaders })
+      setItems(data.items)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Could not load media')
+    }
+  }, [apiFetch, authHeaders, filter])
+
+  useEffect(() => {
+    if (!token) return
+    let ignore = false
+    const query = filter === 'all' ? '' : `?type=${filter}`
+
+    apiFetch(`/media/${query}`, { headers: authHeaders })
+      .then((data) => {
+        if (!ignore) setItems(data.items)
+      })
+      .catch((error) => {
+        if (!ignore) {
+          setStatus(error instanceof Error ? error.message : 'Could not load media')
+        }
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [apiFetch, authHeaders, filter, token])
 
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -219,16 +259,6 @@ function App() {
       setStatus(error instanceof Error ? error.message : 'Authentication failed')
     } finally {
       setBusy(false)
-    }
-  }
-
-  async function loadMedia() {
-    const query = filter === 'all' ? '' : `?type=${filter}`
-    try {
-      const data = await apiFetch(`/media/${query}`, { headers: authHeaders })
-      setItems(data.items)
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Could not load media')
     }
   }
 
@@ -270,6 +300,7 @@ function App() {
         headers: authHeaders,
       })
       setItems((current) => current.filter((item) => item.id !== id))
+      setSelectedItem((current) => (current?.id === id ? null : current))
       setStatus('Deleted.')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Delete failed')
@@ -476,13 +507,22 @@ function App() {
 
             <div className="items-grid">
               {items.map((item) => (
-                <article className="media-card" key={item.id}>
+                <article
+                  className="media-card"
+                  key={item.id}
+                  onClick={() => setSelectedItem(item)}
+                >
                   <div className="media-preview">
                     {item.media_type === 'image' && (
                       <img src={item.cloudinary_url} alt={item.title} />
                     )}
                     {item.media_type === 'video' && (
-                      <video src={item.cloudinary_url} controls preload="metadata" />
+                      <video
+                        src={item.cloudinary_url}
+                        controls
+                        preload="metadata"
+                        onClick={(event) => event.stopPropagation()}
+                      />
                     )}
                     {item.media_type === 'text' && <p>{item.body_text}</p>}
                   </div>
@@ -500,8 +540,22 @@ function App() {
                     {item.media_type !== 'text' && item.body_text && <p>{item.body_text}</p>}
                     <button
                       type="button"
+                      className="text-button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setSelectedItem(item)
+                      }}
+                    >
+                      <Icon name="eye" />
+                      View detail
+                    </button>
+                    <button
+                      type="button"
                       className="text-button danger"
-                      onClick={() => deleteItem(item.id)}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        deleteItem(item.id)
+                      }}
                       disabled={busy}
                     >
                       <Icon name="trash" />
@@ -521,6 +575,95 @@ function App() {
           </section>
         </section>
       </section>
+
+      {selectedItem && (
+        <div className="detail-overlay" onClick={() => setSelectedItem(null)}>
+          <section
+            className="detail-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="detail-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="detail-head">
+              <div className="detail-type">
+                <Icon name={mediaIcon(selectedItem.media_type)} />
+                <span>{selectedItem.media_type}</span>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setSelectedItem(null)}
+                aria-label="Close detail"
+              >
+                <Icon name="x" />
+              </button>
+            </header>
+
+            <div className="detail-preview">
+              {selectedItem.media_type === 'image' && (
+                <img src={selectedItem.cloudinary_url} alt={selectedItem.title} />
+              )}
+              {selectedItem.media_type === 'video' && (
+                <video src={selectedItem.cloudinary_url} controls preload="metadata" />
+              )}
+              {selectedItem.media_type === 'text' && <p>{selectedItem.body_text}</p>}
+            </div>
+
+            <div className="detail-body">
+              <h2 id="detail-title">{selectedItem.title}</h2>
+              {selectedItem.media_type !== 'text' && selectedItem.body_text && (
+                <p>{selectedItem.body_text}</p>
+              )}
+
+              <dl className="detail-list">
+                <div>
+                  <dt>Created</dt>
+                  <dd>{new Date(selectedItem.created_at).toLocaleString()}</dd>
+                </div>
+                <div>
+                  <dt>Type</dt>
+                  <dd>{selectedItem.media_type}</dd>
+                </div>
+                {selectedItem.original_filename && (
+                  <div>
+                    <dt>File</dt>
+                    <dd>{selectedItem.original_filename}</dd>
+                  </div>
+                )}
+                {selectedItem.bytes > 0 && (
+                  <div>
+                    <dt>Size</dt>
+                    <dd>{Math.round(selectedItem.bytes / 1024).toLocaleString()} KB</dd>
+                  </div>
+                )}
+              </dl>
+
+              <div className="detail-actions">
+                {selectedItem.cloudinary_url && (
+                  <a
+                    className="secondary-link"
+                    href={selectedItem.cloudinary_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open file
+                  </a>
+                )}
+                <button
+                  type="button"
+                  className="text-button danger"
+                  onClick={() => deleteItem(selectedItem.id)}
+                  disabled={busy}
+                >
+                  <Icon name="trash" />
+                  Delete
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
 
       {status && <p className="status">{status}</p>}
     </main>
